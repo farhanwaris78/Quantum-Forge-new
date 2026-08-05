@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# QuantumForge portable launcher. This file is also the `quantumforge` command.
+set -euo pipefail
+
+# Resolve the command symlink chain (~/.local/bin/quantumforge -> install tree)
+# to the real launcher file before deriving APP_HOME. Without this every path
+# below silently points at ~/.local instead of the installation.
+LAUNCHER_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$LAUNCHER_SOURCE" ]]; do
+    LAUNCHER_DIR="$(CDPATH= cd -- "$(dirname -- "$LAUNCHER_SOURCE")" && pwd -P)"
+    LAUNCHER_SOURCE="$(readlink "$LAUNCHER_SOURCE")"
+    [[ "$LAUNCHER_SOURCE" != /* ]] && LAUNCHER_SOURCE="$LAUNCHER_DIR/$LAUNCHER_SOURCE"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$LAUNCHER_SOURCE")" && pwd -P)"
+APP_HOME="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)"
+
+case "${1:-}" in
+    --update|--uninstall)
+        OPTION="$1"
+        shift
+        MANAGEMENT="$APP_HOME/management/${OPTION#--}.sh"
+        if [[ ! -x "$MANAGEMENT" ]]; then
+            cat >&2 <<EOF
+This QuantumForge installation is managed by your operating-system package manager.
+Use apt/pacman, Windows Installed apps, or the macOS app/package procedure.
+Portable user installations handle '$OPTION' through management/$(basename "$MANAGEMENT"),
+which is not present here.
+EOF
+            exit 2
+        fi
+        exec "$MANAGEMENT" "$@"
+        ;;
+esac
+
+if [[ -n "${QUANTUMFORGE_JAVA_HOME:-}" ]]; then
+    JAVA="$QUANTUMFORGE_JAVA_HOME/bin/java"
+elif [[ -n "${JAVA_HOME:-}" ]]; then
+    JAVA="$JAVA_HOME/bin/java"
+else
+    JAVA="$(command -v java || true)"
+fi
+
+if [[ -z "$JAVA" || ! -x "$JAVA" ]]; then
+    cat >&2 <<'EOF'
+QuantumForge requires a 64-bit Java 17 (or newer) runtime.
+Install OpenJDK 17, set JAVA_HOME, or set QUANTUMFORGE_JAVA_HOME.
+See docs/INSTALLATION.md for platform-specific commands.
+EOF
+    exit 2
+fi
+
+JAVA_OPTS=("-Dfile.encoding=UTF-8")
+# JavaFX/OpenGL forwarding is unreliable on many X11 tunnels. Prefer software
+# rendering only for a forwarded SSH display; local desktops retain acceleration.
+if [[ -n "${SSH_CONNECTION:-}" && -n "${DISPLAY:-}" ]]; then
+    JAVA_OPTS+=("-Dprism.order=sw")
+fi
+if [[ -n "${QUANTUMFORGE_JAVA_OPTS:-}" ]]; then
+    # Intentional shell-like whitespace splitting for conventional JVM flags.
+    read -r -a USER_JAVA_OPTS <<< "$QUANTUMFORGE_JAVA_OPTS"
+    JAVA_OPTS+=("${USER_JAVA_OPTS[@]}")
+fi
+
+if [[ ! -f "$APP_HOME/app/quantumforge.jar" ]]; then
+    echo "QuantumForge installation is incomplete: app/quantumforge.jar is missing." >&2
+    exit 3
+fi
+
+cd "$APP_HOME"
+exec "$JAVA" "${JAVA_OPTS[@]}" \
+    --module-path "$APP_HOME/lib/javafx" \
+    --add-modules javafx.controls,javafx.fxml,javafx.web,javafx.swing \
+    -cp "$APP_HOME/app/quantumforge.jar:$APP_HOME/lib/*" \
+    quantumforge.launcher.QuantumForgeLauncher "$@"

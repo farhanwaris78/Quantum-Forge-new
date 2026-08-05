@@ -1,0 +1,15 @@
+# Example QuantumForge site profile (copy and edit for your cluster)
+id: example-cluster
+scheduler: slurm
+staging_root: /scratch/$USER/quantumforge
+scratch_root: /scratch/$USER
+partition: compute
+account: myproject
+walltime: 04:00:00
+nodes: 1
+ntasks: 32
+cpus_per_task: 1
+mpi_launcher: srun
+module: quantum-espresso/7.5
+module: openmpi/4.1
+env: OMP_NUM_THREADS=1

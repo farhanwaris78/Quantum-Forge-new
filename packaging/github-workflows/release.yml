@@ -1,0 +1,211 @@
+name: Build release artifacts
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to receive assets (for example v2.0.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          VERSION=$(sed -n 's:.*<version>\([^<]*\)</version>.*:\1:p' pom.xml | head -1)
+          test "$RELEASE_TAG" = "v$VERSION" || {
+            echo "Tag $RELEASE_TAG does not match pom version $VERSION" >&2; exit 1;
+          }
+          test "$(grep -o 'VERSION = "[^"]*"' src/quantumforge/ver/Version.java | cut -d'"' -f2)" = "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+  linux:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - machine: x64
+            runner: ubuntu-24.04
+          - machine: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:20.04
+    steps:
+      - name: Install packaging prerequisites
+        run: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git maven fakeroot
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Build portable baseline and native Debian package
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          packaging/build-portable.sh linux "$MACHINE"
+          cp "target/release/QuantumForge-$VERSION-linux-$MACHINE.tar.gz" /tmp/portable.tar.gz
+          packaging/build-native.sh deb
+          rm -rf target/release && mkdir -p target/release
+          cp /tmp/portable.tar.gz "target/release/QuantumForge-$VERSION-linux-$MACHINE.tar.gz"
+          DEB=$(find target/native -maxdepth 1 -name '*.deb' -print -quit)
+          test -n "$DEB"
+          cp "$DEB" "target/release/QuantumForge-$VERSION-linux-$MACHINE.deb"
+          cp target/quantumforge-sbom.json target/release/quantumforge-sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.machine }}
+          path: target/release/*
+          if-no-files-found: error
+
+  windows:
+    needs: validate
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Build portable ZIP
+        shell: pwsh
+        run: .\packaging\build-portable.ps1 -Machine x64
+      - name: Preserve portable and build MSI
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          Copy-Item "target\release\QuantumForge-$env:VERSION-windows-x64.zip" "$env:RUNNER_TEMP\portable.zip"
+          .\packaging\build-native.ps1 -Type msi
+          Remove-Item "target\release" -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "target\release" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\portable.zip" "target\release\QuantumForge-$env:VERSION-windows-x64.zip"
+          $Msi = Get-ChildItem "target\native\*.msi" | Select-Object -First 1
+          if (-not $Msi) { throw "jpackage did not produce MSI" }
+          Copy-Item $Msi.FullName "target\release\QuantumForge-$env:VERSION-windows-x64.msi"
+          Copy-Item "target\quantumforge-sbom.json" "target\release\quantumforge-sbom.cdx.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64
+          path: target/release/*
+          if-no-files-found: error
+
+  macos:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - machine: x64
+            runner: macos-15-intel
+          - machine: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Build portable archive and DMG
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          packaging/build-portable.sh macos "$MACHINE"
+          cp "target/release/QuantumForge-$VERSION-macos-$MACHINE.tar.gz" "$RUNNER_TEMP/portable.tar.gz"
+          packaging/build-native.sh dmg
+          rm -rf target/release && mkdir -p target/release
+          cp "$RUNNER_TEMP/portable.tar.gz" "target/release/QuantumForge-$VERSION-macos-$MACHINE.tar.gz"
+          DMG=$(find target/native -maxdepth 1 -name '*.dmg' -print -quit)
+          test -n "$DMG"
+          cp "$DMG" "target/release/QuantumForge-$VERSION-macos-$MACHINE.dmg"
+          cp target/quantumforge-sbom.json target/release/quantumforge-sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.machine }}
+          path: target/release/*
+          if-no-files-found: error
+
+  arch-package:
+    needs: [validate, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-linux-x64
+          path: target/release
+      - name: Build pacman package in clean Arch container
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          mkdir -p target/arch-output
+          docker run --rm \
+            -e QF_VERSION="$VERSION" \
+            -v "$PWD:/repo" archlinux:base-devel bash -euxc '
+              pacman -Syu --noconfirm --needed sudo
+              useradd -m builder
+              mkdir -p /build && cp /repo/packaging/arch/PKGBUILD /build/
+              cp "/repo/target/release/QuantumForge-$QF_VERSION-linux-x64.tar.gz" /build/
+              chown -R builder:builder /build
+              cd /build
+              SHA=$(sha256sum "QuantumForge-$QF_VERSION-linux-x64.tar.gz")
+              SHA=${SHA%% *}
+              sudo -u builder QF_ARCHIVE="/build/QuantumForge-$QF_VERSION-linux-x64.tar.gz" \
+                QF_VERSION="$QF_VERSION" QF_SHA256="$SHA" makepkg --noconfirm --force
+              cp ./*.pkg.tar.zst /repo/target/arch-output/
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-arch-x64
+          path: target/arch-output/*.pkg.tar.zst
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, linux, windows, macos, arch-package]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Deduplicate shared SBOM and generate checksums
+        run: |
+          # Identically named SBOM copies may be overwritten during merge; one is sufficient.
+          find dist -maxdepth 1 -type f -printf '%f\n' | sort
+          (cd dist && sha256sum $(find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort) > SHA256SUMS)
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: 'dist/*'
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-release-${{ needs.validate.outputs.version }}
+          path: dist/*

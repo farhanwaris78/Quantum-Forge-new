@@ -1,0 +1,56 @@
+# Maintainer: QuantumForge Development Team
+# This PKGBUILD consumes a previously verified local portable archive.
+pkgname=quantumforge
+pkgver="${QF_VERSION:-2.0.0}"
+pkgrel=1
+pkgdesc="Quantum ESPRESSO workflow editor and results viewer"
+arch=('x86_64' 'aarch64')
+url="https://github.com/farhanwaris78/Quantum-Forge"
+license=('custom')
+depends=('java-runtime>=17' 'gtk3' 'libxtst' 'alsa-lib')
+optdepends=(
+  'quantum-espresso: electronic-structure calculation engine'
+  'xcrysden: external structure visualization'
+  'python-phonopy: phonon post-processing'
+)
+options=('!strip')
+_archive="${QF_ARCHIVE:?Set QF_ARCHIVE to an absolute portable archive path}"
+_checksum="${QF_SHA256:?Set QF_SHA256 to the archive SHA-256}"
+source=("file://${_archive}")
+sha256sums=("${_checksum}")
+
+package() {
+  local bundle
+  bundle="$(find "$srcdir" -maxdepth 1 -type d -name 'QuantumForge-*' -print -quit)"
+  [[ -n "$bundle" ]] || { error "Portable bundle directory not found"; return 1; }
+  install -d "$pkgdir/usr/lib/quantumforge" "$pkgdir/usr/bin" \
+    "$pkgdir/usr/share/applications" "$pkgdir/usr/share/licenses/quantumforge"
+  cp -a "$bundle/." "$pkgdir/usr/lib/quantumforge/"
+  install -Dm644 "$bundle/LICENSE" "$pkgdir/usr/share/licenses/quantumforge/LICENSE"
+  cat > "$pkgdir/usr/bin/quantumforge" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --update)
+    echo "This installation is managed by pacman. Download the new signed/checksummed package, then run:" >&2
+    echo "  sudo pacman -U QuantumForge-<version>-arch-<architecture>.pkg.tar.zst" >&2
+    exit 2 ;;
+  --uninstall)
+    echo "This installation is managed by pacman. To uninstall while preserving ~/.quantumforge:" >&2
+    echo "  sudo pacman -Rns quantumforge" >&2
+    exit 2 ;;
+esac
+exec /usr/lib/quantumforge/bin/quantumforge "$@"
+EOF
+  chmod 755 "$pkgdir/usr/bin/quantumforge"
+  cat > "$pkgdir/usr/share/applications/quantumforge.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=QuantumForge
+Comment=Quantum ESPRESSO workflow editor and results viewer
+Exec=quantumforge
+Icon=/usr/lib/quantumforge/resources/quantumforge.png
+Terminal=false
+Categories=Science;Education;Physics;
+StartupNotify=true
+EOF
+}

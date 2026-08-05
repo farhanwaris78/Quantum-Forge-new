@@ -1,0 +1,12 @@
+# Example PBS/Torque site profile
+id: example-pbs
+scheduler: pbs
+staging_root: /scratch/$USER/quantumforge
+partition: batch
+account: mygroup
+walltime: 02:00:00
+nodes: 1
+ntasks: 16
+cpus_per_task: 1
+module: quantum-espresso/7.5
+env: OMP_NUM_THREADS=1

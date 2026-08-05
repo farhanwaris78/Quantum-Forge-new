@@ -1,0 +1,13 @@
+QuantumForge 2.0.0
+==================
+
+The authoritative project overview, capability matrix, installation links, and
+scientific-status warnings are in README.md.
+
+IMPORTANT: several source packages are experimental or disconnected prototypes;
+they are not complete VASP, CASTEP, thermo_pw, phonopy, BoltzTraP2, GNN, or
+advanced-physics workflows. See docs/CODE_AUDIT.md before research use.
+
+License terms are in LICENSE. The previous Apache-license statement in this file
+conflicted with the repository LICENSE and has been removed; third-party and
+upstream notices are recorded in THIRD_PARTY_NOTICES.md.

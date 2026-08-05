@@ -1,0 +1,11 @@
+# Example SGE/UGE site profile
+id: example-sge
+scheduler: sge
+staging_root: /scratch/$USER/quantumforge
+partition: all.q
+account: myproject
+walltime: 02:00:00
+ntasks: 8
+cpus_per_task: 1
+module: quantum-espresso/7.5
+env: OMP_NUM_THREADS=1
