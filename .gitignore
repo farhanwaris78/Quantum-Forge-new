@@ -1,0 +1,24 @@
+/.project
+/.classpath
+/.settings/
+/class/
+/movie/
+/release/
+/bin/*.jar
+/bin/*.exe
+/docs/build
+
+# Screenshots - never upload screenshots to repo
+docs/screenshots/
+
+# IDE files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+/out/
+/target/
+/build/
+__pycache__/
